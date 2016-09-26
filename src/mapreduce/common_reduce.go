@@ -1,5 +1,11 @@
 package mapreduce
 
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+)
+
 // doReduce does the job of a reduce worker: it reads the intermediate
 // key/value pairs (produced by the map phase) for this task, sorts the
 // intermediate key/value pairs by key, calls the user-defined reduce function
@@ -10,7 +16,6 @@ func doReduce(
 	nMap int, // the number of map tasks that were run ("M" in the paper)
 	reduceF func(key string, values []string) string,
 ) {
-	// TODO:
 	// You will need to write this function.
 	// You can find the intermediate file for this reduce task from map task number
 	// m using reduceName(jobName, m, reduceTaskNumber).
@@ -31,4 +36,38 @@ func doReduce(
 	// 	enc.Encode(KeyValue{key, reduceF(...)})
 	// }
 	// file.Close()
+
+	valuesPerKey := make(map[string][]string)
+
+	mName := mergeName(jobName, reduceTaskNumber)
+	fMerge, err := os.Create(mName)
+	Must(err)
+	mEnc := json.NewEncoder(fMerge)
+	defer fMerge.Close()
+
+	for i := 0; i < nMap; i++ {
+		rName := reduceName(jobName, i, reduceTaskNumber)
+		fReduce, err := os.Open(rName)
+		Must(err)
+		defer fReduce.Close()
+
+		scanner := bufio.NewScanner(fReduce)
+		for scanner.Scan() {
+			var kv KeyValue
+			jsonBytes := scanner.Bytes()
+			err := json.Unmarshal(jsonBytes, &kv)
+			Must(err)
+			values, ok := valuesPerKey[kv.Key]
+			if !ok {
+				values = make([]string, 0)
+				valuesPerKey[kv.Key] = values
+			}
+			valuesPerKey[kv.Key] = append(values, kv.Value)
+		}
+	}
+
+	for k, vs := range valuesPerKey {
+		err := mEnc.Encode(KeyValue{k, reduceF(k, vs)})
+		Must(err)
+	}
 }
