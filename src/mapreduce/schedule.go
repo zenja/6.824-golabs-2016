@@ -2,7 +2,6 @@ package mapreduce
 
 import (
 	"fmt"
-	"log"
 	"sync"
 )
 
@@ -28,33 +27,46 @@ func (mr *Master) schedule(phase jobPhase) {
 	// multiple tasks.
 
 	var wg sync.WaitGroup
+	tasks := make(chan int, ntasks)
+	// put all tasks to tasks channel
 	for taskIndex := 0; taskIndex < ntasks; taskIndex++ {
-		wg.Add(1)
-		go func(taskNumber int) {
-			worker := <-mr.registerChannel
-
-			var f string
-			switch phase {
-			case mapPhase:
-				f = mr.files[taskNumber]
-			case reducePhase:
-				f = ""
-			}
-			args := &DoTaskArgs{
-				JobName:       mr.jobName,
-				File:          f,
-				Phase:         phase,
-				TaskNumber:    taskNumber,
-				NumOtherPhase: nios,
-			}
-			ok := call(worker, "Worker.DoTask", args, nil)
-			if !ok {
-				log.Fatal("Call Worker.DoTask failed!")
-			}
-			wg.Done()
-			mr.registerChannel <- worker
-		}(taskIndex)
+		tasks <- taskIndex
 	}
+	wg.Add(ntasks)
+	go func() {
+		for {
+			select {
+			case taskIndex := <-tasks:
+				go func(taskNumber int) {
+					worker := <-mr.registerChannel
+
+					var f string
+					switch phase {
+					case mapPhase:
+						f = mr.files[taskNumber]
+					case reducePhase:
+						f = ""
+					}
+					args := &DoTaskArgs{
+						JobName:       mr.jobName,
+						File:          f,
+						Phase:         phase,
+						TaskNumber:    taskNumber,
+						NumOtherPhase: nios,
+					}
+					ok := call(worker, "Worker.DoTask", args, nil)
+					if !ok {
+						// if RPC failed, put the task back to task list
+						// and return without notify wait group and re-register
+						tasks <- taskNumber
+						return
+					}
+					wg.Done()
+					mr.registerChannel <- worker
+				}(taskIndex)
+			}
+		}
+	}()
 	wg.Wait()
 	fmt.Printf("Schedule: %v phase done\n", phase)
 }
