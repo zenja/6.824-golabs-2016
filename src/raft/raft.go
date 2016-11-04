@@ -176,6 +176,8 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	reply.Term = rf.currentTerm
 
+	prevRole := rf.role
+
 	// FIXME "all server logic" duplicated code
 	if args.Term > rf.currentTerm {
 		log.Printf("%s #%d (term %d) received RequestVote RPC from #%d (term %d),"+
@@ -189,17 +191,11 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		}
 	}
 
-	if args.Term < rf.currentTerm {
-		reply.VoteGranted = false
-		log.Printf("%s #%d (term %d) refuse to vote for #%d (term %d) due to small term",
-			rf.role, rf.me, rf.currentTerm, args.CandidateId, args.Term)
-	} else if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+	if prevRole == Follower && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
 		reply.VoteGranted = true
-		log.Printf("#%d voted for #%d", rf.me, args.CandidateId)
-	} else {
-		reply.VoteGranted = false
-		log.Printf("%s #%d (term %d) refuse to vote for #%d (term %d) because it has already voted for #%d",
-			rf.role, rf.me, rf.currentTerm, args.CandidateId, args.Term, rf.votedFor)
+		// When giving vote to other peer, also need to reset follower's timer
+		rf.resetElectionTimer <- true
+		log.Printf("#%d voted for #%d and reseting timer", rf.me, args.CandidateId)
 	}
 }
 
