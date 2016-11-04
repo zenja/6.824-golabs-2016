@@ -420,6 +420,12 @@ func startRaft(rf *Raft) {
 }
 
 func doFollower(rf *Raft) {
+	// Init: clean channels for follower
+	select {
+	case <-rf.resetElectionTimer:
+	default:
+	}
+
 	// From Figure 2:
 	// * Respond to RPCs from candidates and leaders
 	// * If election timeout elapses without receiving AppendEntries
@@ -441,6 +447,16 @@ func doFollower(rf *Raft) {
 }
 
 func doCandidate(rf *Raft) {
+	// Init: clean channels for candidate
+	select {
+	case <-rf.changedToFollower:
+	default:
+	}
+	select {
+	case <-rf.resetElectionTimer:
+	default:
+	}
+
 	// From the paper:
 	// On conversion to candidate, start election:
 	// > Increment currentTerm
@@ -530,6 +546,12 @@ func doCandidate(rf *Raft) {
 }
 
 func doLeader(rf *Raft) {
+	// Init: clean channels for leader
+	select {
+	case <-rf.changedToFollower:
+	default:
+	}
+
 	select {
 	// Send heartbeat messages to all other peers in parallel
 	// TODO should this be protected by rf.mu or not?
