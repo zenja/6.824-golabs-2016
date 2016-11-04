@@ -181,16 +181,11 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		log.Printf("%s #%d (term %d) received RequestVote RPC from #%d (term %d),"+
 			" reset term and changing to follower if it is not follower",
 			rf.role, rf.me, rf.currentTerm, args.CandidateId, args.Term)
+		// Update term
 		rf.currentTerm = args.Term
-		prevRole := rf.role
+		// Change role to follower if is candidate/leader
 		if rf.role != Follower {
-			rf.role = Follower
-			select {
-			case rf.changedToFollower <- true:
-			default:
-			}
-			rf.votedFor = -1
-			log.Printf("%s #%d changed into follower and reset votedFor to -1", prevRole, rf.me)
+			rf.becomeFollowerUnSafe(args.Term)
 		}
 	}
 
@@ -280,16 +275,11 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		log.Printf("%s #%d (term %d) received AppendEntires RPC from #%d (term %d),"+
 			" reset term and changing to follower if it is not follower",
 			rf.role, rf.me, rf.currentTerm, args.LeaderId, args.Term)
+		// Update term
 		rf.currentTerm = args.Term
+		// Change role to follower if is candidate/leader
 		if rf.role != Follower {
-			rf.role = Follower
-			select {
-			case rf.changedToFollower <- true:
-			default:
-			}
-			rf.votedFor = -1
-			log.Printf("%s #%d changed into follower and reset votedFor to -1", prevRole, rf.me)
-
+			rf.becomeFollowerUnSafe(args.Term)
 		}
 
 		reply.Success = true
@@ -413,6 +403,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	return rf
 }
+
+// ----------------------------------------------------- Handling ------------------------------------------------------
 
 func startRaft(rf *Raft) {
 	for {
@@ -555,4 +547,21 @@ func doLeader(rf *Raft) {
 // randomElectionTimeout returns a random duration of [150, 300] ms
 func randomElectionTimeout() time.Duration {
 	return time.Duration((newRand.Intn(151) + 150)) * time.Millisecond
+}
+
+// becomeFollowerUnSafe change the role to follower, notify via rf.changedToFollower, and reset rf.votedFor to -1
+// it is "unsafe" because it does not use lock; you need to acquire lock before using this func
+func (rf *Raft) becomeFollowerUnSafe(newTerm int) {
+	if rf.role == Follower {
+		panic("Only candidate or leader can become follower!")
+	}
+	rf.currentTerm = newTerm
+	prevRole := rf.role
+	rf.role = Follower
+	select {
+	case rf.changedToFollower <- true:
+	default:
+	}
+	rf.votedFor = -1
+	log.Printf("%s #%d changed into follower and reset votedFor to -1", prevRole, rf.me)
 }
