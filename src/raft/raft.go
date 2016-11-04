@@ -420,11 +420,12 @@ func startRaft(rf *Raft) {
 }
 
 func doFollower(rf *Raft) {
-	// Init: clean channels for follower
+	// Init: clean channels & votedFor for follower
 	select {
 	case <-rf.resetElectionTimer:
 	default:
 	}
+	rf.votedFor = -1
 
 	// From Figure 2:
 	// * Respond to RPCs from candidates and leaders
