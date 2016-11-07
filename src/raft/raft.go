@@ -69,6 +69,11 @@ type ApplyMsg struct {
 	Snapshot    []byte // ignore for lab2; only used in lab3
 }
 
+type LogEntry struct {
+	data interface{}
+	term int
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -79,18 +84,42 @@ type Raft struct {
 	persister *Persister
 	me        int // index into peers[]
 
-	// Data not described in Figure 2
-	role Role
-
-	// Your data here.
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
+	/* --- Persistent state on all servers --- */
+	/* (Updated on stable storage before responding to RPCs) */
 
 	// latest term server has seen (initialized to 0 on first boot, increases monotonically)
 	currentTerm int
 
 	// candidateId that received vote in current term (or null if none)
 	votedFor int
+
+	// log entries; each entry contains command for state machine, and term when entry
+	// was received by leader (first index is 1)
+	log []LogEntry
+
+	/* --- Volatile state on all servers --- */
+
+	// index of highest log entry known to be committed (initialized to 0, increases monotonically)
+	commitIndex int
+
+	// index of highest log entry applied to state machine (initialized to 0, increases monotonically)
+	lastApplied int
+
+	/* --- Volatile state on leaders --- */
+	/* (Reinitialized after election) */
+
+	// for each server, index of the next log entry to send to that server
+	// (initialized to leader last log index + 1)
+	nextIndex []int
+
+	// for each server, index of highest log entry known to be replicated on server
+	// (initialized to 0, increases monotonically)
+	matchIndex []int
+
+	/* --- Data not in Figure 2. --- */
+
+	// role of the raft peer: Follower, Candidate, or Leader
+	role Role
 
 	// resetElectionTimer is used to notify that the election timer should be set
 	resetElectionTimer chan bool
@@ -222,12 +251,12 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 }
 
 type AppendEntriesArgs struct {
-	Term         int           // leader’s term
-	LeaderId     int           // so follower can redirect clients
-	PrevLogIndex int           // index of log entry immediately preceding new ones
-	PrevLogTerm  int           // term of prevLogIndex entry
-	Entries      []interface{} // log entries to store (empty for heartbeat; may send more than one for efficiency)
-	LeaderCommit int           // leader’s commitIndex
+	Term         int        // leader’s term
+	LeaderId     int        // so follower can redirect clients
+	PrevLogIndex int        // index of log entry immediately preceding new ones
+	PrevLogTerm  int        // term of prevLogIndex entry
+	Entries      []LogEntry // log entries to store (empty for heartbeat; may send more than one for efficiency)
+	LeaderCommit int        // leader’s commitIndex
 }
 
 type AppendEntriesReply struct {
@@ -344,9 +373,21 @@ func (rf *Raft) sendHeartbeatsAsync() {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.role != Leader {
+		return -1, -1, false
+	}
+
+	index := len(rf.log) // FIXME is this correct?
+	term := rf.currentTerm
+	var isLeader bool
+
+	// start agreement async since we should return immediately
+	go func() {
+
+	}()
 
 	return index, term, isLeader
 }
@@ -416,12 +457,7 @@ func startRaft(rf *Raft) {
 }
 
 func doFollower(rf *Raft) {
-	// Init: clean channels & votedFor for follower
-	select {
-	case <-rf.resetElectionTimer:
-	default:
-	}
-	rf.votedFor = -1
+	rf.initFollower()
 
 	// From Figure 2:
 	// * Respond to RPCs from candidates and leaders
@@ -444,15 +480,7 @@ func doFollower(rf *Raft) {
 }
 
 func doCandidate(rf *Raft) {
-	// Init: clean channels for candidate
-	select {
-	case <-rf.changedToFollower:
-	default:
-	}
-	select {
-	case <-rf.resetElectionTimer:
-	default:
-	}
+	rf.initCandidate()
 
 	// From the paper:
 	// On conversion to candidate, start election:
@@ -543,11 +571,7 @@ func doCandidate(rf *Raft) {
 }
 
 func doLeader(rf *Raft) {
-	// Init: clean channels for leader
-	select {
-	case <-rf.changedToFollower:
-	default:
-	}
+	rf.initLeader()
 
 	select {
 	// Send heartbeat messages to all other peers in parallel
@@ -561,6 +585,43 @@ func doLeader(rf *Raft) {
 	}
 }
 
+// ---------------------------------------------------- Peer Init ------------------------------------------------------
+func (rf *Raft) initFollower() {
+	select {
+	case <-rf.resetElectionTimer:
+	default:
+	}
+	rf.votedFor = -1
+}
+
+func (rf *Raft) initCandidate() {
+	select {
+	case <-rf.changedToFollower:
+	default:
+	}
+	select {
+	case <-rf.resetElectionTimer:
+	default:
+	}
+}
+
+func (rf *Raft) initLeader() {
+	select {
+	case <-rf.changedToFollower:
+	default:
+	}
+
+	// init nextIndex[]
+	initNextIndex := len(rf.log)
+	for i := range rf.nextIndex {
+		rf.nextIndex[i] = initNextIndex
+	}
+
+	// init matchIndex[]
+	for i := range rf.matchIndex {
+		rf.matchIndex[i] = 0
+	}
+}
 // ------------------------------------------------------- Utils -------------------------------------------------------
 
 // randomElectionTimeout returns a random duration of [150, 300] ms
